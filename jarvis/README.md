@@ -81,13 +81,17 @@ disclaimer.
 
 ## Limited web research 🔎
 
-Off by default. `/web on` grants Jarvis research access **restricted to an
-allowlist of trustworthy scholarly sources** — he cannot browse the open web:
+Off by default. `/web on` grants Jarvis research access **restricted to
+`.edu`, `.gov`, and `.org` sites only** — he cannot pull information from
+anywhere else, and the restriction is enforced by code on every search and
+every page fetch (including the librarian's automatic study runs):
 
-- Wikipedia, arXiv (academic papers), PubMed, CourtListener (case law),
-  Stanford Encyclopedia of Philosophy, Project Gutenberg, and any `.gov`
-  or `.edu` site
-- Add your own trusted domains, one per line, in `~/.jarvis_domains.txt`
+- That covers Wikipedia and arXiv (`.org`), PubMed (`nih.gov`), and every
+  university (`.edu`) and government (`.gov`) source
+- Need a specific exception? Add domains one per line in
+  `~/.jarvis_domains.txt` — e.g. a single `courtlistener.com` line re-enables
+  automatic case-law research (it's the Free Law Project's public-domain
+  court database, well worth the exception for legal work)
 - Every page he fetches is registered as a **loaded source**, so the citation
   audit can verify his citations against what he actually read
 - He's instructed to tell you which sources he used, with URLs
@@ -110,6 +114,37 @@ allow disclosed AI assistance for research and editing. The work he saves to
 your own voice. For long documents, work section by section and use the
 biggest model your Mac can run.
 
+## How to train Jarvis 🎯
+
+You don't retrain the neural network — you shape his behavior, and it sticks.
+Four levers, in order of impact:
+
+**1. Give him standing orders with `/learn`.** Anything you teach becomes a
+permanent instruction injected into every future session:
+
+```
+/learn Always cite sources in APA format
+/learn When I ask for research, give me a bullet list of findings with a URL for each
+/learn My papers are for a public-administration graduate program; write at that level
+/learn Never use bullet points in final drafts — full paragraphs only
+```
+
+**2. Correct him in conversation.** When he does something wrong, say so —
+*"No — next time show the source URL before the summary"* — he's instructed
+to store corrections permanently via his `remember_fact` tool. Check what
+stuck with `/knowledge`; remove bad habits with `/forget` (then re-teach).
+
+**3. Be specific in the request.** Local models reward precision. Include:
+what to produce, for whom, how long, in what format, from which sources.
+Weak: *"research housing policy"*. Strong: *"search .gov and .edu sources on
+Section 8 housing policy since 2020, read the three best, and give me a
+one-page summary with a citation and URL for each claim."*
+
+**4. Feed his library.** Drop model examples — papers you got A's on, briefs
+written the way you like — into `~/Documents/JarvisLibrary/`. He studies
+them overnight and can imitate: *"search your library for my writing style
+and match it."*
+
 ## Autonomous study — Jarvis learns without being asked 📚
 
 `librarian.py` is Jarvis's self-study system. Once scheduled, he reads and
@@ -128,7 +163,8 @@ python3 librarian.py --schedule   # install the nightly 2 AM study session
   nightly run downloads matching real court opinions from
   [CourtListener](https://www.courtlistener.com) (the Free Law Project's
   public-domain database — a trustworthy source, not random web scraping).
-  Skip `--web` if you want zero internet use.
+  Requires a `courtlistener.com` line in `~/.jarvis_domains.txt` since the
+  default allowlist is .edu/.gov/.org only; skip `--web` for zero internet use.
 - **Everything he studies compounds**: his library is searchable in
   conversation, listed in his mind at startup, and counts as verification
   sources for the citation audit.
@@ -169,8 +205,9 @@ say plainly when he isn't sure. Keep two things in mind:
 - **Refuses remote servers.** If `JARVIS_OLLAMA_URL` is ever pointed at a
   non-localhost address, Jarvis refuses to start rather than send your data out.
 - **Web access is opt-in and fenced.** Research mode starts disabled every
-  session, and even when enabled Jarvis can only reach the scholarly
-  allowlist above — any other domain is refused.
+  session, and even when enabled Jarvis can only reach `.edu`, `.gov`, and
+  `.org` sites (plus your explicit additions) — any other domain is refused
+  in code, on searches and fetches alike.
 - **Private files.** Memory and knowledge files are written with `chmod 600`
   (readable by your user account only).
 - **No arbitrary command execution.** Jarvis's tools are a fixed allowlist

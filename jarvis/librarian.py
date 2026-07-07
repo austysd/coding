@@ -36,8 +36,10 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from jarvis import (  # noqa: E402
     DEFAULT_MODEL,
+    DOMAINS_FILE,
     IS_MAC,
     LIBRARY_FILE,
+    _allowed_host,
     _extract_text,
     _write_private,
     load_library,
@@ -133,6 +135,11 @@ def web_study():
     public-domain court opinions — a trustworthy source, unlike scraping
     random websites.
     """
+    if not _allowed_host("www.courtlistener.com"):
+        print("Web study skipped: courtlistener.com is not on the domain "
+              f"allowlist. Add it (one line) to {DOMAINS_FILE} to enable "
+              "automatic case-law fetching.")
+        return 0
     if not os.path.isfile(TOPICS_FILE):
         os.makedirs(LIBRARY_DIR, exist_ok=True)
         with open(TOPICS_FILE, "w") as f:

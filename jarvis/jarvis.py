@@ -36,17 +36,14 @@ LIBRARY_FILE = os.path.expanduser("~/.jarvis_library.json")
 DOMAINS_FILE = os.path.expanduser("~/.jarvis_domains.txt")
 WORK_DIR = os.path.expanduser("~/Documents/JarvisWork")
 
-# Web research is limited to these trustworthy domains (suffix match).
-# Add your own, one per line, in ~/.jarvis_domains.txt.
+# Web research is limited to .edu, .gov, and .org sites only (suffix match).
+# That covers Wikipedia, arXiv, PubMed (nih.gov), university and government
+# sources. Add specific extra domains, one per line, in ~/.jarvis_domains.txt
+# (e.g. courtlistener.com to re-enable case-law search).
 DEFAULT_ALLOWED_DOMAINS = [
-    "wikipedia.org",
-    "arxiv.org",
-    "courtlistener.com",
-    "ncbi.nlm.nih.gov",       # PubMed
-    "plato.stanford.edu",     # Stanford Encyclopedia of Philosophy
-    "gutenberg.org",
-    ".gov",
     ".edu",
+    ".gov",
+    ".org",
 ]
 MAX_HISTORY = 40  # messages kept in the rolling context window
 MAX_FACTS = 200  # learned facts kept in the knowledge base
@@ -396,9 +393,20 @@ def _http_get(url, timeout=30):
         return resp.read(1_000_000).decode("utf-8", errors="replace")
 
 
+SEARCH_HOSTS = {
+    "wikipedia": "en.wikipedia.org",
+    "papers": "export.arxiv.org",
+    "caselaw": "www.courtlistener.com",
+}
+
+
 def tool_web_search(query, source="wikipedia"):
     if not WEB_MODE:
         return "Web research is disabled, sir. Ask the user to enable it with /web on."
+    host = SEARCH_HOSTS.get(source, SEARCH_HOSTS["wikipedia"])
+    if not _allowed_host(host):
+        return (f"Refused: the '{source}' search uses {host}, which is outside "
+                f"the allowed domains. The user can add it in {DOMAINS_FILE}.")
     q = urllib.parse.quote(query)
     try:
         if source == "papers":
