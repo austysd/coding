@@ -86,12 +86,18 @@ Off by default. `/web on` grants Jarvis research access **restricted to
 anywhere else, and the restriction is enforced by code on every search and
 every page fetch (including the librarian's automatic study runs):
 
-- That covers Wikipedia and arXiv (`.org`), PubMed (`nih.gov`), and every
-  university (`.edu`) and government (`.gov`) source
-- Need a specific exception? Add domains one per line in
-  `~/.jarvis_domains.txt` — e.g. a single `courtlistener.com` line re-enables
-  automatic case-law research (it's the Free Law Project's public-domain
-  court database, well worth the exception for legal work)
+- Search backends: **Semantic Scholar** (academic papers, all fields),
+  **arXiv** (preprints), **Open Library** (books), and **CourtListener**
+  (case law) — plus fetching from any university (`.edu`), government
+  (`.gov`), or nonprofit (`.org`) site
+- **Verified legal sources** are allowed by default: courtlistener.com and
+  justia.com (real case law, codes, and regulations), alongside `.gov` court
+  sites and `.edu` law-school sources like law.cornell.edu
+- **Wikipedia is blocked** — it's a `.org`, but per your standards it's on
+  the untrusted blocklist. Add more distrusted sites one per line in
+  `~/.jarvis_blocked.txt`; the blocklist wins over the allowlist
+- Need a specific exception? Add trusted domains one per line in
+  `~/.jarvis_domains.txt`
 - Every page he fetches is registered as a **loaded source**, so the citation
   audit can verify his citations against what he actually read
 - He's instructed to tell you which sources he used, with URLs
@@ -145,6 +151,44 @@ written the way you like — into `~/Documents/JarvisLibrary/`. He studies
 them overnight and can imitate: *"search your library for my writing style
 and match it."*
 
+## Book breakdowns — become fluent in a book without reading it all 📕
+
+```bash
+python3 bookreport.py mybook.pdf                    # PDFs give exact page numbers
+python3 bookreport.py mybook.pdf --model qwen2.5:32b   # bigger model = better report
+```
+
+Jarvis reads the entire book and produces a professionally formatted report
+(HTML, auto-converted to PDF when Chrome/Edge is installed — otherwise open
+the HTML and press Cmd+P → Save as PDF; the layout is print-ready). Written
+for a reader who has never heard of the book:
+
+- **Opening**: 🏛 what the book is about + 📝 the preface/front matter
+- **Every chapter**, with these sections: 📜 Overview · 💬 Key Quotes
+  (verbatim, page-cited) · 📖 Stories & Case Examples (the author's real
+  ones) · 🎯 Core Teachings · 📊 Frameworks & Tables (reproduced from the
+  book) · 📌 Key Terms (a chapter glossary) · ✅ Actionable Lessons ·
+  🧠 Mindset & Philosophical Insights · 🔮 Metaphors & Analogies ·
+  🤔 Questions for Reflection
+- **Master glossary** at the end: every term, alphabetized, with definitions
+  and page references
+- **Page references throughout** so you can go back to the source (exact for
+  PDFs; approximate and labeled as such for .txt/.docx)
+- **Colored callout boxes** and styled tables; chapters start on new pages
+  in the PDF
+- Supplementary real-world examples are allowed but always labeled
+  *"Supplementary example (not from the book)"* — they never replace the
+  author's own material
+- **Automatic quote audit**: every quote is machine-checked verbatim against
+  the book; anything untraceable is flagged in the appendix
+- The finished report joins Jarvis's library, so you can say *"quiz me on
+  chapter 3"* in chat afterwards
+
+*Honest limit:* a great breakdown makes you conversant and test-ready —
+key arguments, case studies, terms, page refs — but summaries compress; for
+close-reading exams or literature seminars, spot-check the flagged pages in
+the original. Use books you own; the report is your personal study aid.
+
 ## Autonomous study — Jarvis learns without being asked 📚
 
 `librarian.py` is Jarvis's self-study system. Once scheduled, he reads and
@@ -163,8 +207,7 @@ python3 librarian.py --schedule   # install the nightly 2 AM study session
   nightly run downloads matching real court opinions from
   [CourtListener](https://www.courtlistener.com) (the Free Law Project's
   public-domain database — a trustworthy source, not random web scraping).
-  Requires a `courtlistener.com` line in `~/.jarvis_domains.txt` since the
-  default allowlist is .edu/.gov/.org only; skip `--web` for zero internet use.
+  Skip `--web` for zero internet use.
 - **Everything he studies compounds**: his library is searchable in
   conversation, listed in his mind at startup, and counts as verification
   sources for the citation audit.

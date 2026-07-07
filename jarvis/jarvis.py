@@ -37,13 +37,24 @@ DOMAINS_FILE = os.path.expanduser("~/.jarvis_domains.txt")
 WORK_DIR = os.path.expanduser("~/Documents/JarvisWork")
 
 # Web research is limited to .edu, .gov, and .org sites only (suffix match).
-# That covers Wikipedia, arXiv, PubMed (nih.gov), university and government
-# sources. Add specific extra domains, one per line, in ~/.jarvis_domains.txt
+# That covers arXiv, PubMed (nih.gov), university and government sources.
+# Add specific extra domains, one per line, in ~/.jarvis_domains.txt
 # (e.g. courtlistener.com to re-enable case-law search).
 DEFAULT_ALLOWED_DOMAINS = [
     ".edu",
     ".gov",
     ".org",
+    # verified legal/court sources (real case law and statutes, not blogs)
+    "courtlistener.com",   # Free Law Project's public-domain court opinions
+    "justia.com",          # case law, codes, and regulations
+]
+
+# Blocked even when the suffix matches — sites the user doesn't trust.
+# Extend one per line in ~/.jarvis_blocked.txt.
+BLOCKED_FILE = os.path.expanduser("~/.jarvis_blocked.txt")
+DEFAULT_BLOCKED_DOMAINS = [
+    "wikipedia.org",
+    "wikimedia.org",
 ]
 MAX_HISTORY = 40  # messages kept in the rolling context window
 MAX_FACTS = 200  # learned facts kept in the knowledge base
@@ -328,15 +339,15 @@ WEB_TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search trustworthy sources for research material. source='wikipedia' for general topics, 'papers' for academic papers (arXiv), 'caselaw' for court opinions (CourtListener).",
+            "description": "Search trustworthy scholarly sources. source='scholar' for academic papers across fields (Semantic Scholar), 'papers' for preprints (arXiv), 'books' for books (Open Library), 'caselaw' for court opinions (CourtListener).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search terms"},
                     "source": {
                         "type": "string",
-                        "enum": ["wikipedia", "papers", "caselaw"],
-                        "description": "Which source to search (default wikipedia)",
+                        "enum": ["scholar", "papers", "books", "caselaw"],
+                        "description": "Which source to search (default scholar)",
                     },
                 },
                 "required": ["query"],
@@ -360,23 +371,34 @@ WEB_TOOLS = [
 ]
 
 
-def load_allowed_domains():
-    domains = list(DEFAULT_ALLOWED_DOMAINS)
+def _read_domain_file(path, defaults):
+    domains = list(defaults)
     try:
-        with open(DOMAINS_FILE) as f:
+        with open(path) as f:
             domains += [d.strip().lower() for d in f if d.strip() and not d.startswith("#")]
     except OSError:
         pass
     return domains
 
 
+def load_allowed_domains():
+    return _read_domain_file(DOMAINS_FILE, DEFAULT_ALLOWED_DOMAINS)
+
+
+def load_blocked_domains():
+    return _read_domain_file(BLOCKED_FILE, DEFAULT_BLOCKED_DOMAINS)
+
+
+def _host_matches(host, domain):
+    d = domain.lstrip("*")
+    return host == d.lstrip(".") or host.endswith(d if d.startswith(".") else "." + d)
+
+
 def _allowed_host(host):
     host = (host or "").lower()
-    for domain in load_allowed_domains():
-        d = domain.lstrip("*")
-        if host == d.lstrip(".") or host.endswith(d if d.startswith(".") else "." + d):
-            return True
-    return False
+    if any(_host_matches(host, d) for d in load_blocked_domains()):
+        return False
+    return any(_host_matches(host, d) for d in load_allowed_domains())
 
 
 def _html_to_text(html_src):
@@ -394,16 +416,17 @@ def _http_get(url, timeout=30):
 
 
 SEARCH_HOSTS = {
-    "wikipedia": "en.wikipedia.org",
+    "scholar": "api.semanticscholar.org",
     "papers": "export.arxiv.org",
+    "books": "openlibrary.org",
     "caselaw": "www.courtlistener.com",
 }
 
 
-def tool_web_search(query, source="wikipedia"):
+def tool_web_search(query, source="scholar"):
     if not WEB_MODE:
         return "Web research is disabled, sir. Ask the user to enable it with /web on."
-    host = SEARCH_HOSTS.get(source, SEARCH_HOSTS["wikipedia"])
+    host = SEARCH_HOSTS.get(source, SEARCH_HOSTS["scholar"])
     if not _allowed_host(host):
         return (f"Refused: the '{source}' search uses {host}, which is outside "
                 f"the allowed domains. The user can add it in {DOMAINS_FILE}.")
@@ -429,17 +452,31 @@ def tool_web_search(query, source="wikipedia"):
                 f"- {h.get('caseName')} ({h.get('court')}, {h.get('dateFiled')})"
                 f"\n  URL: https://www.courtlistener.com{h.get('absolute_url', '')}"
                 for h in hits)
+        if source == "books":
+            data = json.loads(_http_get(
+                f"https://openlibrary.org/search.json?q={q}&limit=5"
+                "&fields=title,author_name,first_publish_year,key"))
+            hits = data.get("docs", [])
+            if not hits:
+                return "No books found on Open Library for that query."
+            return "\n".join(
+                f"- {h.get('title')} — {', '.join(h.get('author_name', ['?'])[:2])}"
+                f" ({h.get('first_publish_year', '?')})"
+                f"\n  URL: https://openlibrary.org{h.get('key', '')}"
+                for h in hits)
         data = json.loads(_http_get(
-            "https://en.wikipedia.org/w/api.php?action=query&list=search"
-            f"&srsearch={q}&srlimit=5&format=json"))
-        hits = data.get("query", {}).get("search", [])
+            "https://api.semanticscholar.org/graph/v1/paper/search"
+            f"?query={q}&limit=5&fields=title,abstract,url,year,authors,venue"))
+        hits = data.get("data", [])
         if not hits:
-            return "No Wikipedia articles found for that query."
-        return "\n".join(
-            f"- {h['title']}\n  URL: https://en.wikipedia.org/wiki/"
-            + urllib.parse.quote(h["title"].replace(" ", "_"))
-            + f"\n  {_html_to_text(h.get('snippet', ''))}"
-            for h in hits)
+            return "No papers found on Semantic Scholar for that query."
+        out = []
+        for h in hits:
+            authors = ", ".join(a.get("name", "") for a in (h.get("authors") or [])[:3])
+            abstract = _squash(h.get("abstract") or "")[:300]
+            out.append(f"- {h.get('title')} — {authors} ({h.get('year', '?')}, "
+                       f"{h.get('venue') or 'n/a'})\n  URL: {h.get('url')}\n  {abstract}")
+        return "\n\n".join(out)
     except Exception as e:
         return f"Search failed ({e}). The network may be unavailable."
 
@@ -893,7 +930,9 @@ def main():
                           "trusted scholarly sources:")
                     for d in load_allowed_domains():
                         print(f"          • {d}")
-                    print(f"        (add more in {DOMAINS_FILE})")
+                    print("        blocked as untrustworthy: "
+                          + ", ".join(load_blocked_domains()))
+                    print(f"        (extend in {DOMAINS_FILE} / {BLOCKED_FILE})")
                 else:
                     print("JARVIS: Web access revoked, sir. Fully offline again.")
             elif cmd == "/legal":
