@@ -29,7 +29,11 @@ That's it — no `pip install` needed, it's pure Python standard library.
 ## What Jarvis can do
 
 - 💬 **Chat** with a proper J.A.R.V.I.S. personality (calls you "sir", dry wit)
-- 🔊 **Speak replies out loud** using your Mac's built-in voice (`/voice off` to mute)
+- 🪪 **Rename him at will** — `/name Friday` (or anything) permanently renames
+  your assistant; the personality, prompt labels, and spoken sign-off all follow
+- 🔊 **Speak replies out loud** in any macOS voice — `/voice list` shows every
+  voice installed on your Mac (male, female, other languages), `/voice Samantha`
+  switches instantly and persists, `/voice off` mutes
 - 🧠 **Learn permanently** — tell Jarvis your name, preferences, projects, or
   corrections and he stores them in a knowledge base that's injected into every
   future session, so he genuinely gets smarter about *you* over time
@@ -303,7 +307,8 @@ say plainly when he isn't sure. Keep two things in mind:
 
 | Command | Effect |
 |---|---|
-| `/voice on\|off` | toggle spoken replies |
+| `/name <name>` | rename your assistant, permanently (until you rename again) |
+| `/voice on\|off\|list\|<voice>` | toggle speech, list macOS voices, or pick one |
 | `/model <name>` | switch models, e.g. `/model qwen2.5:7b` |
 | `/legal on\|off` | legal work mode: strict citation & drafting rules |
 | `/school ...` | academic mode (persistent): APA 7 + AI-policy rules |

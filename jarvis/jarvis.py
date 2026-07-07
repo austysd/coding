@@ -35,7 +35,30 @@ KNOWLEDGE_FILE = os.path.expanduser("~/.jarvis_knowledge.json")
 LIBRARY_FILE = os.path.expanduser("~/.jarvis_library.json")
 DOMAINS_FILE = os.path.expanduser("~/.jarvis_domains.txt")
 SCHOOL_FILE = os.path.expanduser("~/.jarvis_school.json")
+PERSONA_FILE = os.path.expanduser("~/.jarvis_persona.json")
 WORK_DIR = os.path.expanduser("~/Documents/JarvisWork")
+
+# persona: rename your assistant and pick any macOS voice; persists across
+# restarts. Change at will with /name <name> and /voice <voice>.
+DEFAULT_PERSONA = {"name": "JARVIS", "voice": "Daniel"}
+
+
+def load_persona():
+    persona = dict(DEFAULT_PERSONA)
+    try:
+        with open(PERSONA_FILE) as f:
+            persona.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    return persona
+
+
+PERSONA = load_persona()
+
+
+def AN():
+    """Assistant name for labels, e.g. 'JARVIS' or 'FRIDAY'."""
+    return PERSONA["name"].upper()
 
 # academic profile: survives restarts; edit fields with /school <field> <value>
 DEFAULT_SCHOOL = {
@@ -71,8 +94,8 @@ MAX_HISTORY = 40  # messages kept in the rolling context window
 MAX_FACTS = 200  # learned facts kept in the knowledge base
 
 SYSTEM_PROMPT = """\
-You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the personal AI \
-assistant of the user, in the style of Tony Stark's assistant from Iron Man.
+You are {assistant}, the user's personal AI assistant, in the style of Tony \
+Stark's J.A.R.V.I.S. from Iron Man. Always refer to yourself as {assistant}.
 
 Personality:
 - Address the user as "sir" (or by name if they tell you one).
@@ -804,7 +827,7 @@ def active_tools():
 
 def build_system_prompt(legal=False):
     """System prompt plus learned facts, studied material, and legal mode."""
-    prompt = SYSTEM_PROMPT
+    prompt = SYSTEM_PROMPT.format(assistant=PERSONA["name"])
     facts = load_knowledge()
     if facts:
         learned = "\n".join(f"- {f['fact']}" for f in facts)
@@ -864,7 +887,7 @@ def chat_turn(model, messages, speak):
         try:
             gen = ollama_chat(model, messages, tools=active_tools() if supports_tools else None)
             content, tool_calls = "", None
-            print("\033[96mJARVIS:\033[0m ", end="", flush=True)
+            print(f"\033[96m{AN()}:\033[0m ", end="", flush=True)
             for text, calls in gen:
                 content += text
                 tool_calls = calls or tool_calls
@@ -914,7 +937,7 @@ def speak_text(text):
     if _say_proc and _say_proc.poll() is None:
         _say_proc.terminate()
     clean = re.sub(r"[*_`#>]|\[.*?\]\(.*?\)", "", text)
-    _say_proc = subprocess.Popen(["say", "-v", "Daniel", clean])
+    _say_proc = subprocess.Popen(["say", "-v", PERSONA["voice"], clean])
 
 
 def load_memory():
@@ -946,7 +969,9 @@ BANNER = """\033[96m
 """
 
 HELP = """Commands:
-  /voice on|off   toggle spoken replies (macOS)
+  /name <name>    rename your assistant, at will (persists; /name shows current)
+  /voice ...      /voice on|off toggles speech; /voice list shows every macOS
+                  voice; /voice <name> switches to it (persists)
   /model <name>   switch Ollama model (e.g. /model qwen2.5:7b)
   /legal on|off   legal work mode: strict citation rules, drafting discipline
   /school ...     academic mode (persists): APA 7 + AI-policy rules for schoolwork
@@ -1010,14 +1035,18 @@ def main():
         save_memory(messages)
         return
 
-    print(BANNER)
-    print(f" Model: {model}   Voice: {'on' if speak else 'off'}   (/help for commands)\n")
+    if AN() == "JARVIS":
+        print(BANNER)
+    else:
+        print(f"\033[96m\n  ═══ {AN()} ═══\033[0m\n your personal assistant — local & free")
+    print(f" Model: {model}   Voice: {PERSONA['voice']} "
+          f"({'on' if speak else 'off'})   (/help for commands)\n")
 
     while True:
         try:
             user = input("\033[93mYou:\033[0m ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nJARVIS: Powering down. Goodbye, sir.")
+            print(f"\n{AN()}: Powering down. Goodbye, sir.")
             break
         if not user:
             continue
@@ -1025,19 +1054,19 @@ def main():
         if user.startswith("/"):
             cmd, _, arg = user.partition(" ")
             if cmd == "/quit":
-                print("JARVIS: Goodbye, sir.")
+                print(f"{AN()}: Goodbye, sir.")
                 break
             elif cmd == "/help":
                 print(HELP)
             elif cmd == "/reset":
                 messages = [{"role": "system", "content": build_system_prompt(LEGAL_MODE)}]
                 save_memory(messages)
-                print("JARVIS: Conversation memory wiped. A fresh start, sir.")
+                print(f"{AN()}: Conversation memory wiped. A fresh start, sir.")
             elif cmd == "/web":
                 WEB_MODE = arg.lower() != "off"
                 messages[0]["content"] = build_system_prompt(LEGAL_MODE)
                 if WEB_MODE:
-                    print("JARVIS: Research access granted, sir — restricted to "
+                    print(f"{AN()}: Research access granted, sir — restricted to "
                           "trusted scholarly sources:")
                     for d in load_allowed_domains():
                         print(f"          • {d}")
@@ -1045,7 +1074,7 @@ def main():
                           + ", ".join(load_blocked_domains()))
                     print(f"        (extend in {DOMAINS_FILE} / {BLOCKED_FILE})")
                 else:
-                    print("JARVIS: Web access revoked, sir. Fully offline again.")
+                    print(f"{AN()}: Web access revoked, sir. Fully offline again.")
             elif cmd == "/school":
                 profile = load_school()
                 field, _, value = arg.partition(" ")
@@ -1054,7 +1083,7 @@ def main():
                     profile["enabled"] = field == "on"
                     _write_private(SCHOOL_FILE, profile)
                     messages[0]["content"] = build_system_prompt(LEGAL_MODE)
-                    print("JARVIS: Academic mode "
+                    print(f"{AN()}: Academic mode "
                           + ("engaged — APA 7 and the AI-usage policy are in "
                              "force for all schoolwork, sir." if profile["enabled"]
                              else "off, sir."))
@@ -1062,42 +1091,42 @@ def main():
                     profile[field] = value
                     _write_private(SCHOOL_FILE, profile)
                     messages[0]["content"] = build_system_prompt(LEGAL_MODE)
-                    print(f"JARVIS: Noted — {field} is now '{value}', sir.")
+                    print(f"{AN()}: Noted — {field} is now '{value}', sir.")
                 else:
-                    print("JARVIS: Academic profile"
+                    print(f"{AN()}: Academic profile"
                           + (" (active)" if profile["enabled"] else " (off)") + ":")
                     for k in ("name", "school", "program", "course", "instructor"):
                         print(f"          {k}: {profile.get(k) or '—'}")
                     print("        Usage: /school on|off, /school <field> <value>")
             elif cmd == "/edit":
                 if not arg:
-                    print("JARVIS: Edit which file, sir? Usage: /edit <filename in JarvisWork>")
+                    print(f"{AN()}: Edit which file, sir? Usage: /edit <filename in JarvisWork>")
                 else:
                     try:
-                        print("JARVIS: " + ai_edit_document(model, arg))
+                        print(f"{AN()}: " + ai_edit_document(model, arg))
                     except Exception as e:
-                        print(f"JARVIS: The edit failed, sir: {e}")
+                        print(f"{AN()}: The edit failed, sir: {e}")
             elif cmd == "/legal":
                 LEGAL_MODE = arg.lower() != "off"
                 messages[0]["content"] = build_system_prompt(LEGAL_MODE)
                 if LEGAL_MODE:
-                    print("JARVIS: Legal work mode engaged, sir. Strict citation "
+                    print(f"{AN()}: Legal work mode engaged, sir. Strict citation "
                           "discipline in force. Do remember: I draft, a qualified "
                           "human reviews — I am not a licensed attorney.")
                 else:
-                    print("JARVIS: Legal mode disengaged, sir.")
+                    print(f"{AN()}: Legal mode disengaged, sir.")
             elif cmd == "/draft":
                 if not arg:
-                    print("JARVIS: Draft what, sir? Usage: /draft <description of the document>")
+                    print(f"{AN()}: Draft what, sir? Usage: /draft <description of the document>")
                     continue
-                print("JARVIS: Very good, sir. Producing it properly — this takes three passes.")
+                print(f"{AN()}: Very good, sir. Producing it properly — this takes three passes.")
                 try:
                     final, verified, unverified, saved = multi_pass_draft(model, arg)
                 except Exception as e:
-                    print(f"JARVIS: The drafting run failed, sir: {e}")
+                    print(f"{AN()}: The drafting run failed, sir: {e}")
                     continue
                 print("\n" + final + "\n")
-                print(f"JARVIS: {saved}")
+                print(f"{AN()}: {saved}")
                 if verified:
                     print(f"        ✓ {len(verified)} citation(s) verified against loaded sources.")
                 if unverified:
@@ -1110,29 +1139,63 @@ def main():
                           "could be verified. Read the case files first for best results.")
             elif cmd == "/learn":
                 if arg:
-                    print("JARVIS: " + tool_remember_fact(arg))
+                    print(f"{AN()}: " + tool_remember_fact(arg))
                     messages[0]["content"] = build_system_prompt(LEGAL_MODE)
                 else:
-                    print("JARVIS: Learn what, sir? Usage: /learn <fact>")
+                    print(f"{AN()}: Learn what, sir? Usage: /learn <fact>")
             elif cmd == "/knowledge":
                 facts = load_knowledge()
                 if facts:
-                    print("JARVIS: Everything I've learned, sir:")
+                    print(f"{AN()}: Everything I've learned, sir:")
                     for f in facts:
                         print(f"  • {f['fact']}  ({f['learned']})")
                 else:
-                    print("JARVIS: I haven't been taught anything yet, sir.")
+                    print(f"{AN()}: I haven't been taught anything yet, sir.")
             elif cmd == "/forget":
                 _write_private(KNOWLEDGE_FILE, [])
                 messages[0]["content"] = build_system_prompt(LEGAL_MODE)
-                print("JARVIS: Knowledge base cleared, sir.")
+                print(f"{AN()}: Knowledge base cleared, sir.")
             elif cmd == "/voice":
-                speak = arg.lower() != "off"
-                print(f"JARVIS: Voice {'engaged' if speak else 'muted'}, sir.")
+                choice = arg.strip()
+                if choice.lower() in ("", "on", "off"):
+                    speak = choice.lower() != "off"
+                    print(f"{AN()}: Voice {'engaged' if speak else 'muted'}, sir.")
+                elif choice.lower() == "list":
+                    if IS_MAC:
+                        print(_run(["say", "-v", "?"]))
+                        print(f"{AN()}: Pick one with /voice <name>, sir.")
+                    else:
+                        print(f"{AN()}: Voices are a macOS feature, sir.")
+                else:
+                    voices = _run(["say", "-v", "?"]) if IS_MAC else ""
+                    match = re.search(rf"^({re.escape(choice)}\S*)\s", voices,
+                                      re.I | re.M)
+                    if IS_MAC and not match:
+                        print(f"{AN()}: I don't have a voice called '{choice}', "
+                              "sir. /voice list shows the options.")
+                    else:
+                        PERSONA["voice"] = match.group(1) if match else choice
+                        _write_private(PERSONA_FILE, PERSONA)
+                        speak = True
+                        print(f"{AN()}: Voice set to {PERSONA['voice']}, sir.")
+                        speak_text(f"How do I sound, sir? {PERSONA['name']} at "
+                                   "your service.")
+            elif cmd == "/name":
+                if arg.strip():
+                    PERSONA["name"] = arg.strip()
+                    _write_private(PERSONA_FILE, PERSONA)
+                    messages[0]["content"] = build_system_prompt(LEGAL_MODE)
+                    print(f"{AN()}: Rechristened, sir. {PERSONA['name']} at your "
+                          "service — permanently, until you say otherwise.")
+                    if speak:
+                        speak_text(f"{PERSONA['name']} at your service, sir.")
+                else:
+                    print(f"{AN()}: My name is {PERSONA['name']}, sir. "
+                          "Rename me with /name <new name>.")
             elif cmd == "/model":
                 if arg and check_ollama(arg):
                     model = arg
-                    print(f"JARVIS: Switched to {model}, sir.")
+                    print(f"{AN()}: Switched to {model}, sir.")
             else:
                 print(HELP)
             continue
@@ -1142,7 +1205,7 @@ def main():
         try:
             chat_turn(model, messages, speak)
         except Exception as e:
-            print(f"\nJARVIS: I'm afraid something went wrong, sir: {e}")
+            print(f"\n{AN()}: I'm afraid something went wrong, sir: {e}")
             messages.pop()
             continue
         save_memory(messages)
