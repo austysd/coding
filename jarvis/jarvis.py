@@ -34,7 +34,18 @@ MEMORY_FILE = os.path.expanduser("~/.jarvis_memory.json")
 KNOWLEDGE_FILE = os.path.expanduser("~/.jarvis_knowledge.json")
 LIBRARY_FILE = os.path.expanduser("~/.jarvis_library.json")
 DOMAINS_FILE = os.path.expanduser("~/.jarvis_domains.txt")
+SCHOOL_FILE = os.path.expanduser("~/.jarvis_school.json")
 WORK_DIR = os.path.expanduser("~/Documents/JarvisWork")
+
+# academic profile: survives restarts; edit fields with /school <field> <value>
+DEFAULT_SCHOOL = {
+    "enabled": False,
+    "name": "Rodney",
+    "school": "Tulane University",
+    "program": "Master of Social Work (MSW), 1st year",
+    "course": "",
+    "instructor": "",
+}
 
 # Web research is limited to .edu, .gov, and .org sites only (suffix match).
 # That covers arXiv, PubMed (nih.gov), university and government sources.
@@ -113,6 +124,47 @@ Drafting discipline:
 - Use placeholders like [COURT NAME], [PARTY NAME], [DATE] for any detail not
   given in the sources rather than inventing specifics.
 - Flag every assumption explicitly at the end under "ASSUMPTIONS TO VERIFY".
+"""
+
+ACADEMIC_PROMPT = """
+ACADEMIC MODE — standing rules for all school work.
+Student: {name}. Institution: {school}. Program: {program}.
+(These rules travel with the student to any school; update fields via /school.)
+
+Integrity (NASW Code of Ethics 4.04 and school AI policy):
+- AI must SUPPORT the student's learning, never replace their original
+  thinking or work. Your roles: research help, outlining, feedback and
+  critique, grammar/clarity editing, study support. The ideas, arguments,
+  and final voice must be the student's own.
+- Every use of AI on submitted work must be disclosed and cited. When you
+  help edit a paper, the school requires submitting BOTH the original draft
+  AND the AI-assisted version, plus a footnote naming the AI tool. Never
+  overwrite an original draft; the /edit command handles this correctly.
+- The school runs Turnitin AI detection in Canvas (the AI score starts at
+  25% and is separate from the similarity/plagiarism score). Remind the
+  student of the disclosure rules whenever they ask for writing help.
+
+APA Publication Manual, 7th Edition — apply to every paper:
+- Student title page: paper title; author name ({name}); institutional
+  affiliation ({school}); course number and name; instructor's name;
+  assignment due date; total number of pages. Student papers have NO
+  running head.
+- Headings — Level 1: centered, boldface, Title Case; Level 2: flush left,
+  boldface, Title Case; Level 3: flush left, boldface italic, Title Case;
+  Level 4: indented, boldface, Title Case, ending with a period, paragraph
+  text continues on the same line; Level 5: indented, boldface italic,
+  Title Case, ending with a period, text continues on the same line.
+- Singular "they/them/their/themselves" is correct as a gender-neutral
+  pronoun.
+- One space after a period at the end of a sentence.
+- In-text citations: any source with three or more authors is cited as
+  (First Author et al., year) from the first citation.
+- Reference list: include up to 20 authors; for more than 20, list the
+  first 19, then an ellipsis (…), then the final author. Present DOIs and
+  URLs as hyperlinks. Do not use the label "DOI:". Use "Retrieved from"
+  only when a retrieval date is also given.
+- Use placeholders like [COURSE NUMBER AND NAME], [INSTRUCTOR], [DUE DATE]
+  on title pages when the student hasn't provided them{course_note}.
 """
 
 IS_MAC = platform.system() == "Darwin"
@@ -558,6 +610,58 @@ def load_library():
         return {}
 
 
+def load_school():
+    profile = dict(DEFAULT_SCHOOL)
+    try:
+        with open(SCHOOL_FILE) as f:
+            profile.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    return profile
+
+
+def academic_prompt():
+    p = load_school()
+    extras = ", ".join(f"{k}: {p[k]}" for k in ("course", "instructor") if p.get(k))
+    return ACADEMIC_PROMPT.format(
+        name=p["name"], school=p["school"], program=p["program"],
+        course_note=f" (current defaults — {extras})" if extras else "")
+
+
+AI_DISCLOSURE_FOOTNOTE = (
+    "AI Disclosure: Grammar, clarity, and APA 7 formatting assistance provided "
+    "by J.A.R.V.I.S., a locally run AI assistant (model: {model} via Ollama). "
+    "The original draft was retained and is submitted alongside this version, "
+    "per {school} AI usage policy."
+)
+
+
+def ai_edit_document(model, filename):
+    """Policy-compliant editing: keep the original, save an -ai-edited copy
+    with the required AI-disclosure footnote, and tell the user to submit both."""
+    original = tool_read_document(filename)
+    if original.startswith("No such"):
+        return original
+    profile = load_school()
+    msgs = [
+        {"role": "system", "content": build_system_prompt(LEGAL_MODE)},
+        {"role": "user", "content": (
+            "Edit the following draft for grammar, clarity, and APA 7 style ONLY. "
+            "Do not add ideas, change arguments, or alter the author's voice — "
+            "the thinking must remain entirely the student's own. "
+            "Output only the edited document.\n\n" + original)},
+    ]
+    edited = generate(model, msgs, "editing for grammar, clarity, and APA style")
+    footnote = AI_DISCLOSURE_FOOTNOTE.format(model=model, school=profile["school"])
+    stem, ext = os.path.splitext(os.path.basename(filename))
+    out_name = f"{stem}-ai-edited{ext or '.md'}"
+    saved = tool_save_document(out_name, edited + f"\n\n---\n¹ {footnote}\n")
+    return (f"{saved}\n"
+            f"        Original draft untouched: {filename}\n"
+            f"        Disclosure footnote appended (edit the tool name if you prefer).\n"
+            f"        Per policy, submit BOTH files: the original AND {out_name}.")
+
+
 def tool_search_library(query):
     library = load_library()
     words = [w for w in query.lower().split() if len(w) > 2]
@@ -720,6 +824,8 @@ def build_system_prompt(legal=False):
             "fetched — pages you fetch become verifiable sources. Always tell "
             "the user which sources you used, with URLs.\n"
         )
+    if load_school().get("enabled"):
+        prompt += academic_prompt()
     if legal:
         prompt += LEGAL_PROMPT
     return prompt
@@ -843,6 +949,11 @@ HELP = """Commands:
   /voice on|off   toggle spoken replies (macOS)
   /model <name>   switch Ollama model (e.g. /model qwen2.5:7b)
   /legal on|off   legal work mode: strict citation rules, drafting discipline
+  /school ...     academic mode (persists): APA 7 + AI-policy rules for schoolwork
+                  /school on|off, /school show, /school <field> <value>
+                  (fields: name, school, program, course, instructor)
+  /edit <file>    policy-compliant editing: keeps your original, saves an
+                  -ai-edited version with the required AI-disclosure footnote
   /web on|off     allow research on trusted scholarly sites only (default off)
   /draft <desc>   produce work via draft → self-critique → revise → citation audit
   /learn <fact>   teach Jarvis something permanently
@@ -935,6 +1046,37 @@ def main():
                     print(f"        (extend in {DOMAINS_FILE} / {BLOCKED_FILE})")
                 else:
                     print("JARVIS: Web access revoked, sir. Fully offline again.")
+            elif cmd == "/school":
+                profile = load_school()
+                field, _, value = arg.partition(" ")
+                field = field.lower()
+                if field in ("on", "off"):
+                    profile["enabled"] = field == "on"
+                    _write_private(SCHOOL_FILE, profile)
+                    messages[0]["content"] = build_system_prompt(LEGAL_MODE)
+                    print("JARVIS: Academic mode "
+                          + ("engaged — APA 7 and the AI-usage policy are in "
+                             "force for all schoolwork, sir." if profile["enabled"]
+                             else "off, sir."))
+                elif field in ("name", "school", "program", "course", "instructor") and value:
+                    profile[field] = value
+                    _write_private(SCHOOL_FILE, profile)
+                    messages[0]["content"] = build_system_prompt(LEGAL_MODE)
+                    print(f"JARVIS: Noted — {field} is now '{value}', sir.")
+                else:
+                    print("JARVIS: Academic profile"
+                          + (" (active)" if profile["enabled"] else " (off)") + ":")
+                    for k in ("name", "school", "program", "course", "instructor"):
+                        print(f"          {k}: {profile.get(k) or '—'}")
+                    print("        Usage: /school on|off, /school <field> <value>")
+            elif cmd == "/edit":
+                if not arg:
+                    print("JARVIS: Edit which file, sir? Usage: /edit <filename in JarvisWork>")
+                else:
+                    try:
+                        print("JARVIS: " + ai_edit_document(model, arg))
+                    except Exception as e:
+                        print(f"JARVIS: The edit failed, sir: {e}")
             elif cmd == "/legal":
                 LEGAL_MODE = arg.lower() != "off"
                 messages[0]["content"] = build_system_prompt(LEGAL_MODE)

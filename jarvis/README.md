@@ -106,6 +106,43 @@ every page fetch (including the librarian's automatic study runs):
 Ask things like: *"search for papers on transformer interpretability, read the
 two best ones, and summarize them with links."*
 
+## Academic mode — MSW student profile 🎓✏️
+
+`/school on` activates a **persistent** academic profile (it survives
+restarts, unlike the other modes). Jarvis then applies two rulebooks to all
+schoolwork, automatically:
+
+**Your school's AI-usage policy** (per NASW Code of Ethics 4.04):
+- AI supports your learning; it never replaces your original thinking —
+  Jarvis positions himself as feedback, research, and editing help
+- All AI use on submitted work must be disclosed and cited
+- Grammar/clarity editing follows the two-version rule via **`/edit
+  my-paper.md`**: your original draft is never touched, the AI-assisted
+  version is saved separately with the required footnote naming the AI tool,
+  and Jarvis reminds you to submit **both**
+- He knows Turnitin AI detection runs in Canvas (AI score starts at 25%,
+  separate from the similarity score) and will remind you of disclosure
+  duties whenever you ask for writing help
+
+**APA Publication Manual, 7th Edition** — every paper:
+- Student title page (title, name, institution, course number and name,
+  instructor, due date, page count) with **no running head**
+- All five heading levels formatted correctly
+- Singular "they" as gender-neutral; one space after periods
+- In-text: 3+ authors cited as First Author et al. from the first citation
+- References: up to 20 authors then ellipsis; DOIs/URLs as hyperlinks; no
+  "DOI:" label; "Retrieved from" only with a retrieval date
+
+The profile is school-agnostic — it follows you to any program:
+
+```
+/school show                      # see the profile
+/school name Rodney               # the name on every paper (default)
+/school school Tulane University  # swap when you change schools
+/school course SOWK 6000: Foundations
+/school instructor Dr. Smith
+```
+
 ## Academic work 🎓
 
 Jarvis is built to be your research assistant, not your ghostwriter. For a
@@ -269,6 +306,8 @@ say plainly when he isn't sure. Keep two things in mind:
 | `/voice on\|off` | toggle spoken replies |
 | `/model <name>` | switch models, e.g. `/model qwen2.5:7b` |
 | `/legal on\|off` | legal work mode: strict citation & drafting rules |
+| `/school ...` | academic mode (persistent): APA 7 + AI-policy rules |
+| `/edit <file>` | two-version AI editing with disclosure footnote |
 | `/web on\|off` | research access, allowlisted scholarly sites only |
 | `/draft <desc>` | draft → self-critique → revise → citation audit → save |
 | `/learn <fact>` | teach Jarvis something permanently |
