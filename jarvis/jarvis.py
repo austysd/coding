@@ -32,6 +32,7 @@ OLLAMA_URL = os.environ.get("JARVIS_OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("JARVIS_MODEL", "llama3.1:8b")
 MEMORY_FILE = os.path.expanduser("~/.jarvis_memory.json")
 KNOWLEDGE_FILE = os.path.expanduser("~/.jarvis_knowledge.json")
+LIBRARY_FILE = os.path.expanduser("~/.jarvis_library.json")
 WORK_DIR = os.path.expanduser("~/Documents/JarvisWork")
 MAX_HISTORY = 40  # messages kept in the rolling context window
 MAX_FACTS = 200  # learned facts kept in the knowledge base
@@ -64,6 +65,32 @@ Accuracy: you run fully offline with no live internet knowledge. Never invent
 facts, statistics, quotes, or citations. If you are not confident something is
 true, say so plainly and mark it as needing verification. Being trustworthy
 matters more than sounding complete.
+"""
+
+LEGAL_PROMPT = """
+LEGAL WORK MODE — strict rules in force:
+
+You are assisting with legal paperwork: reading briefs, summarizing filings,
+drafting documents (summonses, complaints, letters, memoranda). You are NOT a
+licensed attorney and must say so if asked; everything you produce is a draft
+for review by a qualified human before filing or service.
+
+Citation discipline (absolute):
+1. Cite ONLY authorities that appear verbatim in the source documents the user
+   has loaded this session. Copy citations character-for-character from the
+   source; never reconstruct one from memory.
+2. If no loaded source supports a proposition, write [CITATION NEEDED — verify]
+   instead of guessing. A missing citation is acceptable; a fabricated one is
+   catastrophic and can get an attorney sanctioned.
+3. Never invent case names, reporter citations, statute numbers, quotes,
+   holdings, dates, docket numbers, or party names.
+
+Drafting discipline:
+- Follow standard structure for the document type (caption, body, prayer for
+  relief, signature block, certificate of service where applicable).
+- Use placeholders like [COURT NAME], [PARTY NAME], [DATE] for any detail not
+  given in the sources rather than inventing specifics.
+- Flag every assumption explicitly at the end under "ASSUMPTIONS TO VERIFY".
 """
 
 IS_MAC = platform.system() == "Darwin"
@@ -169,6 +196,20 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_library",
+            "description": "Search the study notes Jarvis has built from books, briefs, and case files he has read on his own.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Topic or keywords to look up"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "set_timer",
             "description": "Set a timer; Jarvis announces out loud when it finishes.",
             "parameters": {
@@ -267,12 +308,164 @@ def tool_save_document(filename, content):
     return f"Saved to {path} ({len(content)} characters)."
 
 
+SOURCE_DOCS = {}  # filename -> text of documents read this session
+LEGAL_MODE = False  # toggled with /legal; tightens citation & drafting rules
+
+
+def _extract_text(path):
+    """Get plain text out of txt/md, and (on macOS) docx/rtf/pdf files."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".docx", ".doc", ".rtf", ".rtfd", ".odt", ".html", ".webarchive"):
+        if IS_MAC:
+            out = subprocess.run(
+                ["textutil", "-convert", "txt", "-stdout", path],
+                capture_output=True, text=True,
+            )
+            if out.returncode == 0:
+                return out.stdout
+        return f"Cannot convert {ext} files on this system."
+    if ext == ".pdf":
+        out = subprocess.run(["pdftotext", path, "-"], capture_output=True, text=True)
+        if out.returncode == 0:
+            return out.stdout
+        return "Cannot read PDFs yet — install poppler first:  brew install poppler"
+    with open(path, errors="replace") as f:
+        return f.read()
+
+
 def tool_read_document(filename):
     path = _safe_workpath(filename)
     if not path or not os.path.isfile(path):
         return f"No such document in {WORK_DIR}."
-    with open(path) as f:
-        return f.read()[:20000]
+    text = _extract_text(path)[:60000]
+    SOURCE_DOCS[os.path.basename(path)] = text
+    return text[:20000]
+
+
+# citation patterns: case reporters, U.S. Code, C.F.R., case names
+CITATION_RE = re.compile(
+    r"\b\d+\s+(?:U\.\s?S\.|S\.\s?Ct\.|L\.\s?Ed\.(?:\s?2d)?|F\.\s?(?:2d|3d|4th)|F\."
+    r"\s?Supp\.(?:\s?[23]d)?|[NS]\.\s?[EW]\.\s?(?:2d|3d)?|So\.\s?(?:2d|3d)?|P\.\s?"
+    r"(?:2d|3d)?|A\.\s?(?:2d|3d)?|Cal\.\s?Rptr\.(?:\s?[23]d)?)\s+\d+"
+    r"|\b\d+\s+U\.\s?S\.\s?C\.\s*§+\s*\w[\w.\-()]*"
+    r"|\b\d+\s+C\.\s?F\.\s?R\.\s*§*\s*[\d.]+"
+    r"|\b[A-Z][A-Za-z'’.\-]+(?:\s+[A-Za-z'’.\-]+)?\s+v\.\s+[A-Z][A-Za-z'’.\-]+"
+)
+
+
+def _squash(text):
+    return re.sub(r"\s+", " ", text)
+
+
+# introductory signal words that precede a case name but aren't part of it
+SIGNAL_RE = re.compile(r"^(?:See|Cf|Accord|Contra|Compare|But|Also|E\.g)\.?\s+", re.I)
+
+
+def load_library():
+    try:
+        with open(LIBRARY_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def tool_search_library(query):
+    library = load_library()
+    words = [w for w in query.lower().split() if len(w) > 2]
+    hits = []
+    for name, entry in library.items():
+        blob = (name + " " + entry.get("notes", "")).lower()
+        score = sum(blob.count(w) for w in words)
+        if score:
+            hits.append((score, name, entry.get("notes", "")))
+    if not hits:
+        return "Nothing in my study library matches that yet, sir."
+    hits.sort(reverse=True)
+    return "\n\n".join(f"### From my study of '{n}':\n{notes[:2500]}" for _, n, notes in hits[:3])
+
+
+def audit_citations(text):
+    """Check every citation-looking string against the loaded source documents
+    and the study library.
+
+    Returns (verified, unverified) lists. A citation counts as verified only if
+    it appears verbatim (whitespace-normalized) in material Jarvis has read.
+    """
+    corpus_parts = list(SOURCE_DOCS.values())
+    for entry in load_library().values():
+        corpus_parts.append(entry.get("text", ""))
+        corpus_parts.append(entry.get("notes", ""))
+    corpus = _squash("\n".join(corpus_parts))
+    verified, unverified = [], []
+    matches = {
+        SIGNAL_RE.sub("", m.group(0).strip().rstrip(".,;"))
+        for m in CITATION_RE.finditer(text)
+    }
+    for match in matches:
+        (verified if _squash(match) in corpus else unverified).append(match)
+    return sorted(verified), sorted(unverified)
+
+
+def generate(model, messages, label):
+    """One plain (no tools) generation pass; returns the full text."""
+    print(f"  \033[90m… {label}\033[0m")
+    content = ""
+    for text, _ in ollama_chat(model, messages, tools=None, stream=True):
+        content += text
+    return content
+
+
+DISCLAIMER = (
+    "Drafted by Jarvis, a local AI assistant. NOT legal advice. "
+    "Review by a qualified human (for court documents: a licensed attorney) "
+    "is required before signing, filing, or serving."
+)
+
+
+def multi_pass_draft(model, request):
+    """Draft → self-critique → revise → automatic citation audit → save.
+
+    Returns (final_text, verified_citations, unverified_citations, save_result).
+    """
+    msgs = [{"role": "system", "content": build_system_prompt(legal=True)}]
+    if SOURCE_DOCS:
+        sources = "\n\n".join(
+            f"=== SOURCE DOCUMENT: {name} ===\n{text}" for name, text in SOURCE_DOCS.items()
+        )
+        msgs.append({"role": "user", "content": "Source materials for this work:\n\n" + sources[:80000]})
+        msgs.append({"role": "assistant", "content": "Understood. I have reviewed the source materials."})
+    msgs.append({"role": "user", "content": "Produce the following work product in full:\n" + request})
+    draft = generate(model, msgs, "pass 1/3 — drafting")
+
+    msgs.append({"role": "assistant", "content": draft})
+    msgs.append({"role": "user", "content": (
+        "Now critique that draft ruthlessly, as a senior partner reviewing a junior "
+        "associate's work: structure and required sections, completeness, clarity, "
+        "whether every factual claim is traceable to the sources, whether every "
+        "citation was copied exactly from a source, and whether placeholders were "
+        "used instead of invented details. List each specific fix needed."
+    )})
+    critique = generate(model, msgs, "pass 2/3 — self-review")
+
+    msgs.append({"role": "assistant", "content": critique})
+    msgs.append({"role": "user", "content": (
+        "Apply every fix from your critique and output ONLY the complete final document."
+    )})
+    final = generate(model, msgs, "pass 3/3 — final revision")
+
+    verified, unverified = audit_citations(final)
+    report = ["", "", "---", "## CITATION AUDIT (automatic)"]
+    for c in verified:
+        report.append(f"- ✓ verified against loaded sources: {c}")
+    for c in unverified:
+        report.append(f"- ⚠️ **NOT FOUND in any loaded source — verify before use:** {c}")
+    if not (verified or unverified):
+        report.append("- no citations detected in this document")
+    report += ["", "> " + DISCLAIMER]
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    save_result = tool_save_document(f"draft-{stamp}.md", final + "\n".join(report))
+    return final, verified, unverified, save_result
 
 
 def tool_list_documents():
@@ -305,17 +498,28 @@ TOOL_IMPL = {
     "save_document": tool_save_document,
     "read_document": tool_read_document,
     "list_documents": tool_list_documents,
+    "search_library": tool_search_library,
     "set_timer": tool_set_timer,
 }
 
 
-def build_system_prompt():
-    """System prompt plus everything Jarvis has learned so far."""
+def build_system_prompt(legal=False):
+    """System prompt plus learned facts, studied material, and legal mode."""
+    prompt = SYSTEM_PROMPT
     facts = load_knowledge()
-    if not facts:
-        return SYSTEM_PROMPT
-    learned = "\n".join(f"- {f['fact']}" for f in facts)
-    return SYSTEM_PROMPT + "\nThings you have learned about the user:\n" + learned
+    if facts:
+        learned = "\n".join(f"- {f['fact']}" for f in facts)
+        prompt += "\nThings you have learned about the user:\n" + learned + "\n"
+    library = load_library()
+    if library:
+        titles = ", ".join(sorted(library)[:30])
+        prompt += (
+            "\nYou have independently studied these materials (use the "
+            "search_library tool to recall details): " + titles + "\n"
+        )
+    if legal:
+        prompt += LEGAL_PROMPT
+    return prompt
 
 # ---------------------------------------------------------------- ollama client
 
@@ -384,7 +588,7 @@ def chat_turn(model, messages, speak):
             print(f"  \033[90m[{name}: {result.splitlines()[0]}]\033[0m")
             messages.append({"role": "tool", "content": str(result)})
             if name == "remember_fact":
-                messages[0]["content"] = build_system_prompt()
+                messages[0]["content"] = build_system_prompt(LEGAL_MODE)
     return ""
 
 
@@ -435,12 +639,16 @@ BANNER = """\033[96m
 HELP = """Commands:
   /voice on|off   toggle spoken replies (macOS)
   /model <name>   switch Ollama model (e.g. /model qwen2.5:7b)
+  /legal on|off   legal work mode: strict citation rules, drafting discipline
+  /draft <desc>   produce work via draft → self-critique → revise → citation audit
   /learn <fact>   teach Jarvis something permanently
   /knowledge      show everything Jarvis has learned
   /forget         wipe the learned knowledge base
   /reset          clear conversation memory
   /help           this message
   /quit           exit
+Put case files/briefs in ~/Documents/JarvisWork and say "read <filename>".
+Run librarian.py to have Jarvis study books/briefs/cases on his own.
 Anything else is a message to Jarvis."""
 
 
@@ -470,6 +678,7 @@ def check_ollama(model):
 
 
 def main():
+    global LEGAL_MODE
     model = DEFAULT_MODEL
     speak = IS_MAC
 
@@ -506,13 +715,44 @@ def main():
             elif cmd == "/help":
                 print(HELP)
             elif cmd == "/reset":
-                messages = [{"role": "system", "content": build_system_prompt()}]
+                messages = [{"role": "system", "content": build_system_prompt(LEGAL_MODE)}]
                 save_memory(messages)
                 print("JARVIS: Conversation memory wiped. A fresh start, sir.")
+            elif cmd == "/legal":
+                LEGAL_MODE = arg.lower() != "off"
+                messages[0]["content"] = build_system_prompt(LEGAL_MODE)
+                if LEGAL_MODE:
+                    print("JARVIS: Legal work mode engaged, sir. Strict citation "
+                          "discipline in force. Do remember: I draft, a qualified "
+                          "human reviews — I am not a licensed attorney.")
+                else:
+                    print("JARVIS: Legal mode disengaged, sir.")
+            elif cmd == "/draft":
+                if not arg:
+                    print("JARVIS: Draft what, sir? Usage: /draft <description of the document>")
+                    continue
+                print("JARVIS: Very good, sir. Producing it properly — this takes three passes.")
+                try:
+                    final, verified, unverified, saved = multi_pass_draft(model, arg)
+                except Exception as e:
+                    print(f"JARVIS: The drafting run failed, sir: {e}")
+                    continue
+                print("\n" + final + "\n")
+                print(f"JARVIS: {saved}")
+                if verified:
+                    print(f"        ✓ {len(verified)} citation(s) verified against loaded sources.")
+                if unverified:
+                    print(f"        ⚠️ {len(unverified)} citation(s) NOT found in any source — "
+                          "flagged in the file. Verify before relying on them:")
+                    for c in unverified:
+                        print(f"           • {c}")
+                if not SOURCE_DOCS:
+                    print("        Note: no source documents were loaded, so no citation "
+                          "could be verified. Read the case files first for best results.")
             elif cmd == "/learn":
                 if arg:
                     print("JARVIS: " + tool_remember_fact(arg))
-                    messages[0]["content"] = build_system_prompt()
+                    messages[0]["content"] = build_system_prompt(LEGAL_MODE)
                 else:
                     print("JARVIS: Learn what, sir? Usage: /learn <fact>")
             elif cmd == "/knowledge":
@@ -525,7 +765,7 @@ def main():
                     print("JARVIS: I haven't been taught anything yet, sir.")
             elif cmd == "/forget":
                 _write_private(KNOWLEDGE_FILE, [])
-                messages[0]["content"] = build_system_prompt()
+                messages[0]["content"] = build_system_prompt(LEGAL_MODE)
                 print("JARVIS: Knowledge base cleared, sir.")
             elif cmd == "/voice":
                 speak = arg.lower() != "off"

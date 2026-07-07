@@ -46,6 +46,69 @@ That's it — no `pip install` needed, it's pure Python standard library.
   - time & date: *"what time is it?"*
 - ⚡ **One-shot mode**: `python3 jarvis.py "remind me what day it is"`
 
+## Legal work mode ⚖️
+
+Turn it on with `/legal on`. Jarvis switches to strict paperwork discipline for
+reading briefs, summarizing case files, and drafting documents (summonses,
+complaints, letters, memoranda):
+
+1. **Load the case materials** — drop them in `~/Documents/JarvisWork/`
+   (`.pdf`, `.docx`, `.rtf`, `.txt`, `.md` all work) and say
+   *"read complaint.pdf"*.
+2. **Draft with `/draft`** — e.g. `/draft a summons for the defendant in the
+   loaded complaint`. Jarvis produces it in three passes: full draft →
+   ruthless self-critique (as a senior partner reviewing a junior's work) →
+   final revision. This self-review loop is how he catches his own mistakes.
+3. **Automatic citation audit** — every citation in the output is checked
+   *verbatim* against the documents he's actually read. Verified ones are
+   marked ✓; anything he can't trace to a source is flagged
+   **NOT FOUND — verify before use** right in the saved file. He is under
+   standing orders to never cite from memory and to write
+   `[CITATION NEEDED — verify]` rather than guess.
+
+### The honest truth about "attorney-level, zero errors"
+
+No AI — local, cloud, free, or $1,000/month — can guarantee error-free legal
+work or perfect citations. Frontier models still fabricate case law
+occasionally, and real attorneys have been sanctioned by real judges for
+filing AI-invented citations. That is exactly why Jarvis's legal mode is built
+around **verification, not trust**: forbidden from citing anything outside his
+sources, plus an automatic audit that flags what it can't verify. Treat him as
+a tireless junior associate who does the reading and drafting; a qualified
+human must review anything before it's signed, filed, or served — and only a
+licensed attorney can practice law. Every draft he saves carries that
+disclaimer.
+
+## Autonomous study — Jarvis learns without being asked 📚
+
+`librarian.py` is Jarvis's self-study system. Once scheduled, he reads and
+learns every night on his own:
+
+```bash
+python3 librarian.py --schedule   # install the nightly 2 AM study session
+```
+
+- **Reads whatever you drop in `~/Documents/JarvisLibrary/`** — books, legal
+  briefs, case files (`.pdf`, `.docx`, `.txt`, …). Each new file gets studied:
+  he writes structured notes (summary, key points, citations found, lessons)
+  into his permanent library and remembers that he studied it.
+- **Fetches real case law from the web** — list topics in
+  `~/Documents/JarvisLibrary/topics.txt` (e.g. `breach of contract`) and each
+  nightly run downloads matching real court opinions from
+  [CourtListener](https://www.courtlistener.com) (the Free Law Project's
+  public-domain database — a trustworthy source, not random web scraping).
+  Skip `--web` if you want zero internet use.
+- **Everything he studies compounds**: his library is searchable in
+  conversation, listed in his mind at startup, and counts as verification
+  sources for the citation audit.
+
+Check on him anytime: `python3 librarian.py --status`.
+
+*Honest limit:* "learning" means growing his knowledge library and study
+notes — the most a laptop can do. The neural network itself doesn't retrain;
+to raise his raw reasoning power, switch to a bigger model (`/model
+qwen2.5:32b`) — his entire library and knowledge carry over.
+
 ## How "learning" works (and its honest limits)
 
 Jarvis learns the way that's actually possible on a laptop: a **persistent
@@ -91,6 +154,8 @@ say plainly when he isn't sure. Keep two things in mind:
 |---|---|
 | `/voice on\|off` | toggle spoken replies |
 | `/model <name>` | switch models, e.g. `/model qwen2.5:7b` |
+| `/legal on\|off` | legal work mode: strict citation & drafting rules |
+| `/draft <desc>` | draft → self-critique → revise → citation audit → save |
 | `/learn <fact>` | teach Jarvis something permanently |
 | `/knowledge` | show everything Jarvis has learned |
 | `/forget` | wipe the learned knowledge base |
@@ -116,12 +181,19 @@ Switch anytime with `/model <name>` or set `JARVIS_MODEL=qwen2.5:7b` in your she
 ```
 You ──▶ jarvis.py ──▶ Ollama (local server on your Mac) ──▶ open-weight LLM
               │
-              ├─ tools: open apps/sites, timers, system stats, documents
+              ├─ tools: open apps/sites, timers, system stats, documents,
+              │         library search
               ├─ voice: macOS `say`
-              ├─ memory: ~/.jarvis_memory.json        (conversation)
-              ├─ knowledge: ~/.jarvis_knowledge.json  (learned facts)
-              └─ work: ~/Documents/JarvisWork/        (documents he writes)
+              ├─ memory: ~/.jarvis_memory.json         (conversation)
+              ├─ knowledge: ~/.jarvis_knowledge.json   (learned facts)
+              ├─ library: ~/.jarvis_library.json       (study notes + texts)
+              ├─ reading pile: ~/Documents/JarvisLibrary/  (drop files here)
+              └─ work: ~/Documents/JarvisWork/         (documents he writes)
+
+librarian.py (nightly, via launchd) ──▶ studies new files, optionally fetches
+                                        court opinions from CourtListener
 ```
 
-Everything stays on your machine. The only network use is the one-time model
-download and any websites you ask Jarvis to open.
+Everything stays on your machine. Network is used only for the one-time model
+download, websites you ask Jarvis to open, and — only if you enable `--web`
+study — fetching public court opinions from CourtListener.
