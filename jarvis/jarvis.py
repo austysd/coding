@@ -33,7 +33,21 @@ DEFAULT_MODEL = os.environ.get("JARVIS_MODEL", "llama3.1:8b")
 MEMORY_FILE = os.path.expanduser("~/.jarvis_memory.json")
 KNOWLEDGE_FILE = os.path.expanduser("~/.jarvis_knowledge.json")
 LIBRARY_FILE = os.path.expanduser("~/.jarvis_library.json")
+DOMAINS_FILE = os.path.expanduser("~/.jarvis_domains.txt")
 WORK_DIR = os.path.expanduser("~/Documents/JarvisWork")
+
+# Web research is limited to these trustworthy domains (suffix match).
+# Add your own, one per line, in ~/.jarvis_domains.txt.
+DEFAULT_ALLOWED_DOMAINS = [
+    "wikipedia.org",
+    "arxiv.org",
+    "courtlistener.com",
+    "ncbi.nlm.nih.gov",       # PubMed
+    "plato.stanford.edu",     # Stanford Encyclopedia of Philosophy
+    "gutenberg.org",
+    ".gov",
+    ".edu",
+]
 MAX_HISTORY = 40  # messages kept in the rolling context window
 MAX_FACTS = 200  # learned facts kept in the knowledge base
 
@@ -310,6 +324,136 @@ def tool_save_document(filename, content):
 
 SOURCE_DOCS = {}  # filename -> text of documents read this session
 LEGAL_MODE = False  # toggled with /legal; tightens citation & drafting rules
+WEB_MODE = False  # toggled with /web; allows research on allowlisted sites only
+
+WEB_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search trustworthy sources for research material. source='wikipedia' for general topics, 'papers' for academic papers (arXiv), 'caselaw' for court opinions (CourtListener).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search terms"},
+                    "source": {
+                        "type": "string",
+                        "enum": ["wikipedia", "papers", "caselaw"],
+                        "description": "Which source to search (default wikipedia)",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_webpage",
+            "description": "Fetch and read a page from an allowlisted scholarly site (found via web_search). The text becomes a loaded source for citation verification.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full URL to fetch"}
+                },
+                "required": ["url"],
+            },
+        },
+    },
+]
+
+
+def load_allowed_domains():
+    domains = list(DEFAULT_ALLOWED_DOMAINS)
+    try:
+        with open(DOMAINS_FILE) as f:
+            domains += [d.strip().lower() for d in f if d.strip() and not d.startswith("#")]
+    except OSError:
+        pass
+    return domains
+
+
+def _allowed_host(host):
+    host = (host or "").lower()
+    for domain in load_allowed_domains():
+        d = domain.lstrip("*")
+        if host == d.lstrip(".") or host.endswith(d if d.startswith(".") else "." + d):
+            return True
+    return False
+
+
+def _html_to_text(html_src):
+    text = re.sub(r"(?is)<(script|style|nav|header|footer)[^>]*>.*?</\1>", " ", html_src)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    import html as _html
+    text = _html.unescape(text)
+    return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+", " ", text)).strip()
+
+
+def _http_get(url, timeout=30):
+    req = urllib.request.Request(url, headers={"User-Agent": "jarvis-assistant/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(1_000_000).decode("utf-8", errors="replace")
+
+
+def tool_web_search(query, source="wikipedia"):
+    if not WEB_MODE:
+        return "Web research is disabled, sir. Ask the user to enable it with /web on."
+    q = urllib.parse.quote(query)
+    try:
+        if source == "papers":
+            xml = _http_get(f"https://export.arxiv.org/api/query?search_query=all:{q}&max_results=5")
+            entries = re.findall(
+                r"<entry>.*?<id>(.*?)</id>.*?<title>(.*?)</title>.*?<summary>(.*?)</summary>",
+                xml, re.S)
+            if not entries:
+                return "No papers found on arXiv for that query."
+            return "\n\n".join(
+                f"- {_squash(t).strip()}\n  URL: {u.strip()}\n  {_squash(s).strip()[:300]}"
+                for u, t, s in entries)
+        if source == "caselaw":
+            data = json.loads(_http_get(
+                f"https://www.courtlistener.com/api/rest/v4/search/?type=o&q={q}"))
+            hits = data.get("results", [])[:5]
+            if not hits:
+                return "No court opinions found for that query."
+            return "\n".join(
+                f"- {h.get('caseName')} ({h.get('court')}, {h.get('dateFiled')})"
+                f"\n  URL: https://www.courtlistener.com{h.get('absolute_url', '')}"
+                for h in hits)
+        data = json.loads(_http_get(
+            "https://en.wikipedia.org/w/api.php?action=query&list=search"
+            f"&srsearch={q}&srlimit=5&format=json"))
+        hits = data.get("query", {}).get("search", [])
+        if not hits:
+            return "No Wikipedia articles found for that query."
+        return "\n".join(
+            f"- {h['title']}\n  URL: https://en.wikipedia.org/wiki/"
+            + urllib.parse.quote(h["title"].replace(" ", "_"))
+            + f"\n  {_html_to_text(h.get('snippet', ''))}"
+            for h in hits)
+    except Exception as e:
+        return f"Search failed ({e}). The network may be unavailable."
+
+
+def tool_fetch_webpage(url):
+    if not WEB_MODE:
+        return "Web research is disabled, sir. Ask the user to enable it with /web on."
+    if not re.match(r"^https?://", url):
+        url = "https://" + url
+    host = urllib.parse.urlparse(url).hostname
+    if not _allowed_host(host):
+        return (f"Refused: {host} is not on the research allowlist "
+                f"(trusted scholarly sources only). The user can add domains "
+                f"in {DOMAINS_FILE}.")
+    try:
+        text = _html_to_text(_http_get(url))
+    except Exception as e:
+        return f"Could not fetch {url}: {e}"
+    if len(text) < 100:
+        return f"Fetched {url} but found no readable text."
+    SOURCE_DOCS[url] = text[:60000]
+    return f"[Fetched {url} — now a loaded source for citation checking]\n\n" + text[:15000]
 
 
 def _extract_text(path):
@@ -427,7 +571,7 @@ def multi_pass_draft(model, request):
 
     Returns (final_text, verified_citations, unverified_citations, save_result).
     """
-    msgs = [{"role": "system", "content": build_system_prompt(legal=True)}]
+    msgs = [{"role": "system", "content": build_system_prompt(legal=LEGAL_MODE)}]
     if SOURCE_DOCS:
         sources = "\n\n".join(
             f"=== SOURCE DOCUMENT: {name} ===\n{text}" for name, text in SOURCE_DOCS.items()
@@ -500,7 +644,13 @@ TOOL_IMPL = {
     "list_documents": tool_list_documents,
     "search_library": tool_search_library,
     "set_timer": tool_set_timer,
+    "web_search": tool_web_search,
+    "fetch_webpage": tool_fetch_webpage,
 }
+
+
+def active_tools():
+    return TOOLS + WEB_TOOLS if WEB_MODE else TOOLS
 
 
 def build_system_prompt(legal=False):
@@ -516,6 +666,14 @@ def build_system_prompt(legal=False):
         prompt += (
             "\nYou have independently studied these materials (use the "
             "search_library tool to recall details): " + titles + "\n"
+        )
+    if WEB_MODE:
+        prompt += (
+            "\nWeb research is enabled (limited to an allowlist of scholarly "
+            "sources). To research: web_search first, then fetch_webpage on the "
+            "promising results. Base claims and citations on what you actually "
+            "fetched — pages you fetch become verifiable sources. Always tell "
+            "the user which sources you used, with URLs.\n"
         )
     if legal:
         prompt += LEGAL_PROMPT
@@ -553,7 +711,7 @@ def chat_turn(model, messages, speak):
     supports_tools = True
     for _ in range(5):  # cap tool round-trips
         try:
-            gen = ollama_chat(model, messages, tools=TOOLS if supports_tools else None)
+            gen = ollama_chat(model, messages, tools=active_tools() if supports_tools else None)
             content, tool_calls = "", None
             print("\033[96mJARVIS:\033[0m ", end="", flush=True)
             for text, calls in gen:
@@ -640,6 +798,7 @@ HELP = """Commands:
   /voice on|off   toggle spoken replies (macOS)
   /model <name>   switch Ollama model (e.g. /model qwen2.5:7b)
   /legal on|off   legal work mode: strict citation rules, drafting discipline
+  /web on|off     allow research on trusted scholarly sites only (default off)
   /draft <desc>   produce work via draft → self-critique → revise → citation audit
   /learn <fact>   teach Jarvis something permanently
   /knowledge      show everything Jarvis has learned
@@ -678,7 +837,7 @@ def check_ollama(model):
 
 
 def main():
-    global LEGAL_MODE
+    global LEGAL_MODE, WEB_MODE
     model = DEFAULT_MODEL
     speak = IS_MAC
 
@@ -718,6 +877,17 @@ def main():
                 messages = [{"role": "system", "content": build_system_prompt(LEGAL_MODE)}]
                 save_memory(messages)
                 print("JARVIS: Conversation memory wiped. A fresh start, sir.")
+            elif cmd == "/web":
+                WEB_MODE = arg.lower() != "off"
+                messages[0]["content"] = build_system_prompt(LEGAL_MODE)
+                if WEB_MODE:
+                    print("JARVIS: Research access granted, sir — restricted to "
+                          "trusted scholarly sources:")
+                    for d in load_allowed_domains():
+                        print(f"          • {d}")
+                    print(f"        (add more in {DOMAINS_FILE})")
+                else:
+                    print("JARVIS: Web access revoked, sir. Fully offline again.")
             elif cmd == "/legal":
                 LEGAL_MODE = arg.lower() != "off"
                 messages[0]["content"] = build_system_prompt(LEGAL_MODE)

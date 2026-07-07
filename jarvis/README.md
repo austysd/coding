@@ -79,6 +79,37 @@ human must review anything before it's signed, filed, or served — and only a
 licensed attorney can practice law. Every draft he saves carries that
 disclaimer.
 
+## Limited web research 🔎
+
+Off by default. `/web on` grants Jarvis research access **restricted to an
+allowlist of trustworthy scholarly sources** — he cannot browse the open web:
+
+- Wikipedia, arXiv (academic papers), PubMed, CourtListener (case law),
+  Stanford Encyclopedia of Philosophy, Project Gutenberg, and any `.gov`
+  or `.edu` site
+- Add your own trusted domains, one per line, in `~/.jarvis_domains.txt`
+- Every page he fetches is registered as a **loaded source**, so the citation
+  audit can verify his citations against what he actually read
+- He's instructed to tell you which sources he used, with URLs
+- `/web off` returns him to fully offline; he starts offline every session
+
+Ask things like: *"search for papers on transformer interpretability, read the
+two best ones, and summarize them with links."*
+
+## Academic work 🎓
+
+Jarvis is built to be your research assistant, not your ghostwriter. For a
+graduate paper he can: find and summarize sources (`/web on`), build an
+annotated outline from your instructions, critique your drafts hard
+(*"review my draft like a harsh professor"*), and check your citations.
+`/draft` can produce full-length prose, but know the stakes: submitting
+AI-written work as your own is academic misconduct at most universities and
+a serious risk in graduate school. Check your program's AI policy — many
+allow disclosed AI assistance for research and editing. The work he saves to
+`~/Documents/JarvisWork/` is most valuable as raw material you rewrite in
+your own voice. For long documents, work section by section and use the
+biggest model your Mac can run.
+
 ## Autonomous study — Jarvis learns without being asked 📚
 
 `librarian.py` is Jarvis's self-study system. Once scheduled, he reads and
@@ -137,6 +168,9 @@ say plainly when he isn't sure. Keep two things in mind:
   no chat, memory, or documents ever leave your machine.
 - **Refuses remote servers.** If `JARVIS_OLLAMA_URL` is ever pointed at a
   non-localhost address, Jarvis refuses to start rather than send your data out.
+- **Web access is opt-in and fenced.** Research mode starts disabled every
+  session, and even when enabled Jarvis can only reach the scholarly
+  allowlist above — any other domain is refused.
 - **Private files.** Memory and knowledge files are written with `chmod 600`
   (readable by your user account only).
 - **No arbitrary command execution.** Jarvis's tools are a fixed allowlist
@@ -155,6 +189,7 @@ say plainly when he isn't sure. Keep two things in mind:
 | `/voice on\|off` | toggle spoken replies |
 | `/model <name>` | switch models, e.g. `/model qwen2.5:7b` |
 | `/legal on\|off` | legal work mode: strict citation & drafting rules |
+| `/web on\|off` | research access, allowlisted scholarly sites only |
 | `/draft <desc>` | draft → self-critique → revise → citation audit → save |
 | `/learn <fact>` | teach Jarvis something permanently |
 | `/knowledge` | show everything Jarvis has learned |
